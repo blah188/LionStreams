@@ -1,0 +1,24 @@
+{
+  "name": "LionStreams",
+  "version": "1.0.0",
+  "description": "Two tiny Arduino Stream adapters for embedded C++. StringStream is a read/write Stream view over an external String. ServerStream buffers Print output and flushes it in chunks to a synchronous web server (ESP8266WebServer / ESP32 WebServer), so large HTML pages are generated without holding the whole response in RAM. Header-only, non-copyable, no dependencies.",
+  "keywords": "stream, string, webserver, http, html, esp8266, esp32, embedded, arduino",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blah188/LionStreams.git"
+  },
+  "authors": [
+    {
+      "name": "leva",
+      "email": "leva.the.lion@gmail.com",
+      "maintainer": true
+    }
+  ],
+  "license": "0BSD",
+  "frameworks": "arduino",
+  "platforms": [
+    "espressif8266",
+    "espressif32"
+  ],
+  "headers": "LionStreams.h"
+}

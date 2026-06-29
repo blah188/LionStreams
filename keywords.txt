@@ -1,0 +1,23 @@
+#######################################
+# Syntax Coloring Map for LionStreams
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+StringStream	KEYWORD1
+ServerStream	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+reset	KEYWORD2
+flush	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+DEFAULT_FLUSH_SIZE	LITERAL1
