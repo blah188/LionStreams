@@ -15,9 +15,15 @@ ServerStream	KEYWORD1
 
 reset	KEYWORD2
 flush	KEYWORD2
+Finish	KEYWORD2
+aborted	KEYWORD2
+clientWritable	KEYWORD2
 
 #######################################
 # Constants (LITERAL1)
 #######################################
 
 DEFAULT_FLUSH_SIZE	LITERAL1
+SERVERSTREAM_PAGE_BUDGET_MS	LITERAL1
+SERVERSTREAM_WRITE_WAIT_MS	LITERAL1
+SERVERSTREAM_TRACE	LITERAL1

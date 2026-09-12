@@ -64,16 +64,28 @@ void handleRoot() {
     for (int i = 0; i < 500; i++)
         out.printf("<li>%d</li>", i);                 // auto-flushes as it fills
     out.print(F("</ol></body></html>"));
-    out.flush();                                      // send the last chunk
+    out.Finish();                                     // last chunk + close the response
 }
+```
+
+`Finish()` returns `false` when the stream had been cut and the page never reached the
+client — worth logging, because nothing else makes that visible:
+
+```cpp
+    if (!out.Finish())
+        Serial.println("page cut");
 ```
 
 > ⚠️ **Contract**
 > - **You must start the response first** (`setContentLength(CONTENT_LENGTH_UNKNOWN)`
 >   + `send(200, type, "")`) before writing.
-> - **Call `flush()` at the end.** The destructor does **not** flush — a stack-local
->   stream is destroyed at method exit, and silently emitting a partial buffer there
->   (e.g. on an error/early-return path) would be surprising, so flushing is explicit.
+> - **End with `Finish()`.** The destructor does **not** flush — a stack-local stream is
+>   destroyed at method exit, and silently emitting a partial buffer there (e.g. on an
+>   error/early-return path) would be surprising, so ending the page is explicit.
+>   The older hand-written pair still works and does the same thing:
+>   `out.flush();` then `server.chunkedResponseFinalize()` (`sendContent("")` on ESP32) —
+>   but only when `aborted()` is false: the terminating chunk must not be sent to a client
+>   that stopped reading.
 > - **Write-only**: `read()`/`peek()` return `-1`, `available()` returns `0`.
 > - **Non-copyable.**
 > - Server type is selected per platform: `ESP8266WebServer` on ESP8266,
@@ -96,7 +108,8 @@ request->send(r);
 `print*()`/`printf()` (append) · `reset()` (clear + rewind).
 
 **ServerStream(server, flushSize = 1024)** — `write()` · `print*()`/`printf()`
-(buffered, auto-flush at `flushSize`) · `flush()`.
+(buffered, auto-flush at `flushSize`) · `flush()` · `Finish()` (flush + close the chunked
+response; `false` = the page was cut) · `aborted()` · static `clientWritable(server)`.
 
 ## License
 

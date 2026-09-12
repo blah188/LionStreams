@@ -106,7 +106,7 @@ public:
     explicit ServerStream(ServerStreamServer &srv, size_t flushSize = DEFAULT_FLUSH_SIZE,
                           uint32_t budgetMs = DEFAULT_PAGE_BUDGET_MS)
         : _server(srv), _flushSize(flushSize ? flushSize : DEFAULT_FLUSH_SIZE),
-          _budgetMs(budgetMs), _spentMs(0), _muted(false)
+          _budgetMs(budgetMs), _spentMs(0), _muted(false), _finished(false)
 #ifdef SERVERSTREAM_TRACE
           , _chunks(0)
 #endif
@@ -176,6 +176,37 @@ public:
     // stop generating an expensive page early, but does not have to.
     bool aborted() const { return _muted; }
 
+    // End of the page: flush what is still buffered and close the chunked response,
+    // unless the stream was cut. Returns FALSE when it was — the caller then knows the
+    // page never reached the client and can log it, which is otherwise invisible.
+    //
+    // Replaces the pair every consumer used to write by hand:
+    //     out.flush();
+    //     server.chunkedResponseFinalize();   // or sendContent("") on ESP32
+    // Both halves were easy to get wrong. The terminating chunk must NOT be sent to a
+    // client that stopped reading — it is one more write into a socket that already
+    // refuses them — and which call terminates a response is a platform detail no page
+    // should have to know. The old pair still works; this is the shorter, safer way.
+    //
+    // Idempotent: calling it twice will not emit a second terminator (a stray one lands
+    // after the response is complete and corrupts the next request on a keep-alive
+    // connection).
+    bool Finish()
+    {
+        if (_finished)
+            return !_muted;
+        _finished = true;
+        doFlush(); // sends the last partial chunk, or discards it if muted
+        if (_muted)
+            return false;
+#ifdef ESP32
+        _server.sendContent(""); // ESP32 WebServer has no chunkedResponseFinalize()
+#else
+        _server.chunkedResponseFinalize();
+#endif
+        return true;
+    }
+
 private:
     void doFlush()
     {
@@ -235,12 +266,24 @@ private:
 #endif
         }
 #if defined(ESP32) && SERVERSTREAM_WRITE_WAIT_MS > 0
-        // Ask before every chunk, not just the first: this is the only defence against a
-        // single write() that never returns (WiFiClient::write() loops on select() with a
-        // 1 s timeout and 10 retries, but ANY partial send resets that counter, so a peer
-        // draining a few bytes at a time holds the caller indefinitely — 30 s on 724 bytes,
-        // measured). The budget cannot cover the FIRST chunk: nothing is spent yet.
-        else if (!clientWritable(_server))
+        // Only before the FIRST chunk, and that is the whole point of this probe: the
+        // budget is measured inside sendContent(), so on the first chunk nothing has been
+        // spent yet and the budget cannot protect anything. It guards against a single
+        // write() that never returns (WiFiClient::write() loops on select() with a 1 s
+        // timeout and 10 retries, but ANY partial send resets that counter, so a peer
+        // draining a few bytes at a time holds the caller indefinitely — 30 s on 724
+        // bytes, measured).
+        //
+        // It used to run before EVERY chunk, and that was wrong: select() answers "is
+        // there room in the send buffer right now", not "is the client alive". A healthy
+        // browser fills that buffer routinely in the middle of a page — we push chunks
+        // faster than TCP drains them — and the stream was then declared dead, dropping
+        // the tail and the terminating chunk. Invisible from the browser (the visible
+        // HTML had already arrived, and a page that refreshes replaces the hung request),
+        // but real: 17 cut pages out of ~660 requests overnight on one node. From the
+        // second chunk on, the budget already covers a slow peer, and it is the honest
+        // measure — five seconds actually spent writing, not one 300 ms guess.
+        else if (_spentMs == 0 && !clientWritable(_server))
         {
             _muted = true;
 #ifdef SERVERSTREAM_TRACE
@@ -258,6 +301,7 @@ private:
     uint32_t _budgetMs;
     uint32_t _spentMs; // cumulative time spent inside sendContent()
     bool _muted;
+    bool _finished; // Finish() already ran — never emit a second terminating chunk
 #ifdef SERVERSTREAM_TRACE
     unsigned _chunks;
 #endif

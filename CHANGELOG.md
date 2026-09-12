@@ -3,6 +3,36 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-09-12
+
+### Added
+- **`ServerStream::Finish()`** — flush what is buffered and close the chunked response in
+  one call, returning `false` when the stream had been cut and the page never reached the
+  client. Replaces the pair every consumer wrote by hand (`out.flush();` plus
+  `chunkedResponseFinalize()` or `sendContent("")`), where both halves were easy to get
+  wrong: the terminating chunk must NOT be sent to a client that stopped reading — it is
+  one more write into a socket that already refuses them — and which call terminates a
+  response is a platform detail no page should have to know. The return value makes a cut
+  page visible at all, which it otherwise is not. Idempotent, so a stray second call
+  cannot emit a second terminator and corrupt the next request on a keep-alive
+  connection. The old pair keeps working unchanged.
+
+### Fixed
+- **The write-readiness probe no longer cuts healthy pages.** It ran before *every* chunk,
+  but `select()` answers "is there room in the send buffer right now", not "is the client
+  alive" — and a healthy browser fills that buffer routinely in the middle of a page,
+  because chunks are pushed faster than TCP drains them. The stream was then declared
+  dead and the tail plus the terminating chunk were dropped. Invisible from the browser
+  (the visible HTML had already arrived, and a page that refreshes replaces the hung
+  request) but real: **17 cut pages out of ~660 requests overnight** on an ESP32 node
+  polling its own `/status` once a minute.
+
+  The probe now runs only before the FIRST chunk, which is the whole reason it exists:
+  the budget is measured inside `sendContent()`, so on the first chunk nothing has been
+  spent yet and the budget cannot protect anything. From the second chunk on the budget
+  already covers a slow peer, and it is the honest measure — five seconds actually spent
+  writing, not one 300 ms guess. Affects ESP32 only (the probe is not compiled elsewhere).
+
 ## [1.1.0] - 2026-09-10
 
 ### Added
