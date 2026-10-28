@@ -43,8 +43,12 @@
 // page has spent longer than its budget INSIDE sendContent(), or the peer has
 // reset the connection, the stream goes MUTE -- write() still accepts and counts
 // everything, so the caller finishes generating the page normally, but nothing
-// more is sent. The socket is NOT closed here: the web server closes it in its
-// own loop, and a live-but-slow client is never killed off by this class.
+// more is sent. On ESP32 the socket is then closed right away, by Finish() -- not
+// out of impatience with a slow client, but because the framework writes its OWN
+// terminating chunk after the handler returns, where this class can no longer
+// protect anything (see SERVERSTREAM_CLOSE_ON_CUT). Where that macro is off, the
+// socket is left alone: the web server closes it in its own loop, and a
+// live-but-slow client is never killed off by this class.
 //
 // Only time spent inside sendContent() is charged to the budget, so a page that
 // is slow to GENERATE (reading files, walking a long device list) never loses
@@ -84,6 +88,34 @@
 // stopped reading altogether.
 #ifndef SERVERSTREAM_WRITE_WAIT_MS
 #define SERVERSTREAM_WRITE_WAIT_MS 300
+#endif
+
+// Close a cut client in Finish() instead of leaving it to the web server (1 = on, 0 = off).
+//
+// This is not impatience with a slow peer. A cut page is already truncated, and the
+// terminating chunk is deliberately not sent to a client that stopped reading -- but
+// skipping it only MOVES that write, it does not remove it. The response is chunked, so
+// once the handler returns the framework runs its own finalizer
+// (WebServer::_finalizeResponse() -> sendContent("")) and pushes "0\r\n\r\n" into the same
+// socket through an unguarded write. Measured on a real hub twice in two days (21.10.2026):
+// 23 s and 30 s of a frozen loop for those three bytes, with the page itself long finished.
+//
+// Nothing in this class can reach that write -- it happens after the last line the page
+// controls -- so the only lever left is the early return inside the core's own write:
+// `if (!_connected || fd < 0) return 0;`. Closing the socket here arms it, and the
+// framework's finalizer costs nothing. Verified present in both ESP32 cores 2.0.17 and
+// 3.2.x, which also still reset the write retry counter on every partial send.
+//
+// ESP32 only by default: the ESP8266 core times each write against the client timeout and
+// bails out at once on a CLOSED connection, so there the leftover write costs a few seconds
+// at worst -- and closing early would truncate a page that a slow-but-live client would
+// have finished reading.
+#ifndef SERVERSTREAM_CLOSE_ON_CUT
+#if defined(ESP32)
+#define SERVERSTREAM_CLOSE_ON_CUT 1
+#else
+#define SERVERSTREAM_CLOSE_ON_CUT 0
+#endif
 #endif
 
 #if defined(ESP8266)
@@ -180,6 +212,11 @@ public:
     // unless the stream was cut. Returns FALSE when it was — the caller then knows the
     // page never reached the client and can log it, which is otherwise invisible.
     //
+    // A cut page also closes the client socket here, unless SERVERSTREAM_CLOSE_ON_CUT is
+    // off (it is on for ESP32 and off for ESP8266 by default). That is what keeps the
+    // framework's own terminating chunk from blocking the caller for half a minute; the
+    // macro's comment has the measurements.
+    //
     // Replaces the pair every consumer used to write by hand:
     //     out.flush();
     //     server.chunkedResponseFinalize();   // or sendContent("") on ESP32
@@ -198,7 +235,15 @@ public:
         _finished = true;
         doFlush(); // sends the last partial chunk, or discards it if muted
         if (_muted)
+        {
+#if SERVERSTREAM_CLOSE_ON_CUT
+            // Our terminating chunk is skipped below, but the framework still has one of
+            // its own to send once we return — into a socket that is not draining. Close
+            // the client and that write turns into an early `return 0`.
+            _server.client().stop();
+#endif
             return false;
+        }
 #ifdef ESP32
         _server.sendContent(""); // ESP32 WebServer has no chunkedResponseFinalize()
 #else

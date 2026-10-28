@@ -3,6 +3,29 @@
 All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-21
+
+### Changed
+- **A cut page now closes the client socket** (`SERVERSTREAM_CLOSE_ON_CUT`, on for ESP32,
+  off for ESP8266). `Finish()` has always skipped the terminating chunk for a client that
+  stopped reading — but skipping it only moved that write instead of removing it: the
+  response is chunked, so after the handler returns the framework sends its own terminator
+  (`WebServer::_finalizeResponse()` → `sendContent("")`), and those three bytes go into the
+  same unresponsive socket through an unguarded write. Two events on a real hub, a day
+  apart, froze the caller for 23 s and 30 s **after** the page was already finished and
+  logged as cut. Closing the socket in `Finish()` arms the core's own
+  `if (!_connected || fd < 0) return 0;`, which is the only lever left — the write happens
+  past the last line a page controls. Unchanged on ESP8266: there the core caps every write
+  against the client timeout, so the leftover write is cheap, and closing early would
+  truncate a page a slow-but-live client would have read. Set the macro to 0 to restore the
+  old behaviour exactly.
+
+### Notes
+- Checked against ESP32 Arduino cores 2.0.17 and 3.2.x: both still send the framework
+  terminator after the handler, and both still reset the write retry counter on every
+  partial send, so a peer draining a few bytes at a time keeps one `write()` spinning. The
+  upgrade does not make this macro unnecessary.
+
 ## [1.2.0] - 2026-09-12
 
 ### Added
